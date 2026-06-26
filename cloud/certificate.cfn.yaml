@@ -10,6 +10,8 @@ Parameters:
 Resources:
   Certificate:
     Type: AWS::CertificateManager::Certificate
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       DomainName: !Ref DomainName
       SubjectAlternativeNames:

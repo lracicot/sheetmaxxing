@@ -401,6 +401,62 @@
       }
     }
 
+    @media print {
+      @page {
+        size: letter;
+        margin: 0.5in;
+      }
+
+      body {
+        padding: 0;
+        background: #ffffff;
+        color: #000000;
+      }
+
+      .page-header,
+      footer,
+      .col-controls,
+      .stats,
+      .legend,
+      .warn-banner,
+      .sheet-actions,
+      .results-placeholder {
+        display: none !important;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      .col-results {
+        position: static;
+      }
+
+      .results-panel {
+        border: none;
+        box-shadow: none;
+        max-height: none;
+        overflow: visible;
+        padding: 0;
+      }
+
+      .sheet-wrap {
+        break-after: page;
+        page-break-after: always;
+      }
+
+      .sheet-wrap:last-child {
+        break-after: auto;
+        page-break-after: auto;
+      }
+
+      .sheet-canvas-frame {
+        min-height: 0;
+        background: #ffffff;
+        border: none;
+      }
+    }
+
     .col-results {
       position: sticky;
       top: 1.25rem;
@@ -573,6 +629,13 @@
       vertical-align: top;
     }
 
+    .sheet-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
     .dl-btn {
       font-family: var(--mono);
       font-size: 11px;
@@ -589,6 +652,16 @@
     }
 
     .dl-btn:hover { background: var(--border); }
+
+    .dl-btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--bg);
+    }
+
+    .dl-btn.primary:hover {
+      opacity: 0.88;
+    }
 
     .warn-banner {
       font-size: 12px;
@@ -777,6 +850,11 @@ const SHEET_PREVIEW_COLORS = {
   grid: '#dddbd0',
   border: '#888888',
 };
+
+const PRINT_DPI = 300;
+const PRINT_PAGE_W_IN = 8.5;
+const PRINT_PAGE_H_IN = 11;
+const PRINT_MARGIN_IN = 0.5;
 
 const DEFAULT_CUTS = [
   { w: 780, h: 188, name: 'Cabinet Door',  qty: 1 },
@@ -1042,7 +1120,8 @@ function parsePartsCSV(text) {
 
 function downloadBlob(filename, mime, content) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+  const blob = content instanceof Blob ? content : new Blob([content], { type: mime });
+  a.href = URL.createObjectURL(blob);
   a.download = filename;
   a.click();
   URL.revokeObjectURL(a.href);
@@ -1161,6 +1240,7 @@ function pieceFromPlacement(item, pl) {
     h: pl.ph,
     name: item.name,
     color: item.color,
+    patternIdx: item.patternIdx,
     rotated: pl.rot,
     origW: item.w,
     origH: item.h,
@@ -1316,7 +1396,7 @@ function packSheetShelvesPartial(sheetW, sheetH, items, kerf, allowRot) {
         const item = items[a.i];
         placed.push({
           x: curX, y: shelfTop, w: a.w, h: a.h,
-          name: item.name, color: item.color,
+          name: item.name, color: item.color, patternIdx: item.patternIdx,
           rotated: a.rotated, origW: item.w, origH: item.h,
         });
         curX += a.w + kerf;
@@ -1375,7 +1455,7 @@ function fillFreeSpace(freeRects, items, kerf, allowRot) {
     const f = free[bestFree];
     const p = {
       x: f.x, y: f.y, w: bestW, h: bestH,
-      name: item.name, color: item.color,
+      name: item.name, color: item.color, patternIdx: item.patternIdx,
       rotated: bestRotated, origW: item.w, origH: item.h,
     };
     placed.push(p);
@@ -1545,59 +1625,273 @@ function alignSimilarPiecesSecondPass(sheet, sw, sh, kerf) {
   }
 }
 
-function fitSheetPreviewSize(containerW, containerH, sw, sh) {
-  let w = containerW;
-  let h = (w * sh) / sw;
-  if (h > containerH) {
-    h = containerH;
-    w = (h * sw) / sh;
-  }
-  return {
-    w: Math.max(1, Math.floor(w)),
-    h: Math.max(1, Math.floor(h)),
-  };
+function toMm(value, unit) {
+  return unit === 'mm' ? value : value * 25.4;
 }
 
-function drawSheetCanvas(ctx, dw, dh, sw, sh, sheet, kerf, unit, colors) {
-  const scale = dw / sw;
-  const sheetH = (sh * dw) / sw;
-
-  ctx.fillStyle = colors.sheet;
-  ctx.fillRect(0, 0, dw, sheetH);
-
-  ctx.strokeStyle = colors.grid;
-  ctx.lineWidth = 0.5;
-  const gridStep = unit === 'mm' ? 100 : 1;
-  for (let x = 0; x <= sw; x += gridStep) {
-    ctx.beginPath();
-    ctx.moveTo(x * scale, 0);
-    ctx.lineTo(x * scale, sheetH);
-    ctx.stroke();
+function assignPartIds(sheet) {
+  let id = 1;
+  for (const p of [...sheet.placed].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    p.partId = id++;
   }
-  for (let y = 0; y <= sh; y += gridStep) {
-    ctx.beginPath();
-    ctx.moveTo(0, y * scale);
-    ctx.lineTo(dw, y * scale);
-    ctx.stroke();
+}
+
+function getLabelMode(pw, ph, unit) {
+  const wMm = toMm(pw, unit);
+  const hMm = toMm(ph, unit);
+  const minDim = Math.min(wMm, hMm);
+  const maxDim = Math.max(wMm, hMm);
+
+  if (wMm >= 45 && hMm >= 20) return 'full';
+  if (minDim >= 16 && maxDim >= 24) return 'name';
+  if (wMm < 30 && hMm >= wMm * 1.4) return 'number-rotated';
+  return 'number';
+}
+
+function clamp(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+const HATCH_PATTERNS = [
+  null,
+  'diag-right',
+  'diag-left',
+  'horizontal',
+  'vertical',
+  'crosshatch',
+];
+
+function drawHatch(ctx, x, y, w, h, type, step) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.strokeStyle = '#666666';
+  ctx.lineWidth = Math.max(1, Math.min(w, h) * 0.008);
+  if (type === 'diag-right') {
+    for (let d = -h; d < w + h; d += step) {
+      ctx.beginPath(); ctx.moveTo(x + d, y); ctx.lineTo(x + d + h, y + h); ctx.stroke();
+    }
+  } else if (type === 'diag-left') {
+    for (let d = -h; d < w + h; d += step) {
+      ctx.beginPath(); ctx.moveTo(x + d, y + h); ctx.lineTo(x + d + h, y); ctx.stroke();
+    }
+  } else if (type === 'horizontal') {
+    for (let ly = y + step; ly < y + h; ly += step) {
+      ctx.beginPath(); ctx.moveTo(x, ly); ctx.lineTo(x + w, ly); ctx.stroke();
+    }
+  } else if (type === 'vertical') {
+    for (let lx = x + step; lx < x + w; lx += step) {
+      ctx.beginPath(); ctx.moveTo(lx, y); ctx.lineTo(lx, y + h); ctx.stroke();
+    }
+  } else if (type === 'crosshatch') {
+    for (let d = -h; d < w + h; d += step) {
+      ctx.beginPath(); ctx.moveTo(x + d, y); ctx.lineTo(x + d + h, y + h); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x + d, y + h); ctx.lineTo(x + d + h, y); ctx.stroke();
+    }
   }
+  ctx.restore();
+}
 
-  ctx.strokeStyle = colors.border;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(0, 0, dw, sheetH);
-
-  for (const p of sheet.placed) {
-    const x = p.x * scale;
-    const y = p.y * scale;
-    const pw = p.w * scale;
-    const ph = p.h * scale;
-
+function fillPartRect(ctx, x, y, pw, ph, p, print) {
+  if (!print) {
     ctx.fillStyle = p.color + 'cc';
     ctx.fillRect(x, y, pw, ph);
     ctx.strokeStyle = p.color;
-    ctx.lineWidth = 1.5;
+    return;
+  }
+  ctx.fillStyle = '#f5f5f3';
+  ctx.fillRect(x, y, pw, ph);
+  const hatch = HATCH_PATTERNS[(p.patternIdx || 0) % HATCH_PATTERNS.length];
+  if (hatch) {
+    const step = Math.max(6, Math.min(pw, ph) * 0.06);
+    drawHatch(ctx, x, y, pw, ph, hatch, step);
+  }
+  ctx.strokeStyle = '#1a1917';
+}
+
+function labelFontPx(pw, ph, labelMode) {
+  const minDim = Math.min(pw, ph);
+  const maxDim = Math.max(pw, ph);
+
+  if (labelMode === 'number-rotated') {
+    return clamp(Math.min(maxDim * 0.13, minDim * 0.72), 10, 17);
+  }
+  if (labelMode === 'number') {
+    return clamp(minDim * 0.55, 9, 15);
+  }
+  if (labelMode === 'name') {
+    return clamp(Math.min(minDim * 0.28, ph * 0.26), 9, 14);
+  }
+  return clamp(Math.min(minDim * 0.24, ph * 0.24, pw * 0.09), 9, 14);
+}
+
+function drawSingleLabel(ctx, text, x, y, fontPx) {
+  ctx.font = `bold ${fontPx}px monospace`;
+  ctx.shadowColor = 'rgba(0,0,0,0.4)';
+  ctx.shadowBlur = 2;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(text, x, y);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+}
+
+function drawLabelLines(ctx, lines, sizes, cx, cy) {
+  const gap = 1.12;
+  const metrics = lines.map((line, i) => {
+    ctx.font = `bold ${sizes[i]}px monospace`;
+    return { line, font: sizes[i], w: ctx.measureText(line).width };
+  });
+  const totalH = metrics.reduce((sum, m, i) => sum + m.font * (i === 0 ? 1 : gap), 0);
+
+  ctx.shadowColor = 'rgba(0,0,0,0.4)';
+  ctx.shadowBlur = 2;
+  ctx.fillStyle = '#ffffff';
+
+  let y = cy - totalH / 2 + metrics[0].font * 0.5;
+  for (const m of metrics) {
+    ctx.font = `bold ${m.font}px monospace`;
+    ctx.fillText(m.line, cx, y);
+    y += m.font * gap;
+  }
+
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+}
+
+function printLabelFontPx(pw, ph, labelMode) {
+  const minDim = Math.min(pw, ph);
+  const maxDim = Math.max(pw, ph);
+  if (labelMode === 'number-rotated') {
+    return clamp(Math.min(maxDim * 0.14, minDim * 0.8), 14, 60);
+  }
+  return clamp(minDim * 0.5, 12, 48);
+}
+
+function drawPrintLabel(ctx, p, x, y, pw, ph) {
+  const rotated = pw < ph * 0.6;
+  const idTag = `#${p.partId}`;
+  const availW = rotated ? ph : pw;
+  const availH = rotated ? pw : ph;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  let fontPx = clamp(Math.min(availW * 0.45, availH * 0.65), 8, 48);
+  ctx.font = `bold ${fontPx}px monospace`;
+  let m = ctx.measureText(idTag);
+  const pad = fontPx * 0.2;
+
+  while (m.width + pad * 2 > availW * 0.95 && fontPx > 6) {
+    fontPx -= 1;
+    ctx.font = `bold ${fontPx}px monospace`;
+    m = ctx.measureText(idTag);
+  }
+
+  if (fontPx * 1.1 + pad * 2 > availH * 0.95) {
+    fontPx = Math.max(6, (availH * 0.95 - pad * 2) / 1.1);
+    ctx.font = `bold ${fontPx}px monospace`;
+    m = ctx.measureText(idTag);
+  }
+
+  const cx = x + pw / 2;
+  const cy = y + ph / 2;
+  const bgW = m.width + pad * 2;
+  const bgH = fontPx * 1.1 + pad * 2;
+
+  if (rotated) {
+    ctx.translate(cx, cy);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.fillRect(-bgW / 2, -bgH / 2, bgW, bgH);
+    ctx.fillStyle = '#1a1917';
+    ctx.fillText(idTag, 0, 0);
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.fillRect(cx - bgW / 2, cy - bgH / 2, bgW, bgH);
+    ctx.fillStyle = '#1a1917';
+    ctx.fillText(idTag, cx, cy);
+  }
+  ctx.restore();
+}
+
+function drawPartLabel(ctx, p, x, y, pw, ph, pxPerUnit, unit, labelMode, print) {
+  if (print) {
+    drawPrintLabel(ctx, p, x, y, pw, ph);
+    return;
+  }
+
+  const primary = labelFontPx(pw, ph, labelMode);
+  const secondary = Math.max(9, primary * 0.82);
+  const cx = x + pw / 2;
+  const cy = y + ph / 2;
+  const dim = `${p.origW}×${p.origH}`;
+  const shortName = p.name.length > 18 ? p.name.slice(0, 17) + '…' : p.name;
+  const idTag = `#${p.partId}`;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  if (labelMode === 'number-rotated') {
+    ctx.translate(cx, cy);
+    ctx.rotate(-Math.PI / 2);
+    drawSingleLabel(ctx, idTag, 0, 0, primary);
+    ctx.restore();
+    return;
+  }
+
+  if (labelMode === 'number') {
+    drawSingleLabel(ctx, idTag, cx, cy, primary);
+  } else if (labelMode === 'name') {
+    drawLabelLines(ctx, [idTag, shortName], [secondary, primary], cx, cy);
+  } else {
+    drawLabelLines(ctx, [shortName, dim], [primary, secondary], cx, cy);
+  }
+  ctx.restore();
+}
+
+function drawSheetLayout(ctx, offsetX, offsetY, dw, dh, sw, sh, sheet, kerf, unit, colors, print) {
+  const scale = dw / sw;
+  const sheetH = (sh * dw) / sw;
+
+  ctx.fillStyle = print ? '#ffffff' : colors.sheet;
+  ctx.fillRect(offsetX, offsetY, dw, sheetH);
+
+  if (!print) {
+    ctx.strokeStyle = colors.grid;
+    ctx.lineWidth = 0.5;
+    const gridStep = unit === 'mm' ? 100 : 1;
+    for (let gx = 0; gx <= sw; gx += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(offsetX + gx * scale, offsetY);
+      ctx.lineTo(offsetX + gx * scale, offsetY + sheetH);
+      ctx.stroke();
+    }
+    for (let gy = 0; gy <= sh; gy += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(offsetX, offsetY + gy * scale);
+      ctx.lineTo(offsetX + dw, offsetY + gy * scale);
+      ctx.stroke();
+    }
+  }
+
+  ctx.strokeStyle = print ? '#1a1917' : colors.border;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(offsetX, offsetY, dw, sheetH);
+
+  for (const p of sheet.placed) {
+    const x = offsetX + p.x * scale;
+    const y = offsetY + p.y * scale;
+    const pw = p.w * scale;
+    const ph = p.h * scale;
+
+    fillPartRect(ctx, x, y, pw, ph, p, print);
+    ctx.lineWidth = print ? 2 : 1.5;
     ctx.strokeRect(x, y, pw, ph);
 
-    if (p.rotated) {
+    if (!print && p.rotated) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(x, y, pw, ph);
@@ -1613,39 +1907,259 @@ function drawSheetCanvas(ctx, dw, dh, sw, sh, sheet, kerf, unit, colors) {
       ctx.restore();
     }
 
-    ctx.save();
-    const fontSize = Math.min(12, Math.max(7, pw / 8));
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${fontSize}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const label = p.name.length > 16 ? p.name.slice(0, 15) + '…' : p.name;
-    const dim = `${p.origW}×${p.origH}`;
-    const cx = x + pw / 2;
-    const cy = y + ph / 2;
-    if (ph > 20) {
-      ctx.fillText(label, cx, cy - fontSize * 0.7);
-      ctx.font = `${Math.max(6, fontSize - 2)}px monospace`;
-      ctx.fillStyle = '#ffffffaa';
-      ctx.fillText(dim + (p.rotated ? ' ↻' : ''), cx, cy + fontSize * 0.7);
-    } else {
-      ctx.fillText(dim, cx, cy);
+    if (p.partId) {
+      const labelMode = getLabelMode(p.w, p.h, unit);
+      drawPartLabel(ctx, p, x, y, pw, ph, scale, unit, labelMode, print);
     }
-    ctx.restore();
   }
 
-  if (kerf > 0 && scale * kerf >= 1.5) {
+  if (!print && kerf > 0 && scale * kerf >= 1.5) {
     ctx.strokeStyle = '#cc440055';
     ctx.lineWidth = kerf * scale;
     for (const p of sheet.placed) {
       ctx.strokeRect(
-        p.x * scale + (kerf * scale) / 2,
-        p.y * scale + (kerf * scale) / 2,
+        offsetX + p.x * scale + (kerf * scale) / 2,
+        offsetY + p.y * scale + (kerf * scale) / 2,
         p.w * scale - kerf * scale,
         p.h * scale - kerf * scale,
       );
     }
   }
+}
+
+function unitsPerInch(unit) {
+  return unit === 'mm' ? 25.4 : 1;
+}
+
+function createLetterCanvas(dpi) {
+  const pageW = Math.round(PRINT_PAGE_W_IN * dpi);
+  const pageH = Math.round(PRINT_PAGE_H_IN * dpi);
+  const margin = Math.round(PRINT_MARGIN_IN * dpi);
+  const canvas = document.createElement('canvas');
+  canvas.width = pageW;
+  canvas.height = pageH;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pageW, pageH);
+  return {
+    canvas,
+    ctx,
+    pageW,
+    pageH,
+    margin,
+    contentW: pageW - margin * 2,
+    contentH: pageH - margin * 2,
+  };
+}
+
+function letterPagePdfSpec() {
+  return { widthPt: PRINT_PAGE_W_IN * 72, heightPt: PRINT_PAGE_H_IN * 72 };
+}
+
+function buildLayoutPrintPage(sw, sh, sheet, kerf, unit, dpi, sheetNum) {
+  const { canvas, ctx, margin, contentW, contentH } = createLetterCanvas(dpi);
+
+  const fitScale = Math.min(contentW / sw, contentH / sh);
+  const drawW = sw * fitScale;
+  const drawH = sh * fitScale;
+  const offsetX = margin + (contentW - drawW) / 2;
+  const offsetY = margin + (contentH - drawH) / 2;
+
+  drawSheetLayout(
+    ctx, offsetX, offsetY, drawW, drawH, sw, sh, sheet, kerf, unit,
+    SHEET_PREVIEW_COLORS, true,
+  );
+
+  return canvas;
+}
+
+function buildCutListPage(sheet, unit, dpi, sheetNum, sw, sh) {
+  const { canvas, ctx, pageH, margin, contentW } = createLetterCanvas(dpi);
+  const placed = [...sheet.placed].sort((a, b) => a.partId - b.partId);
+  const unitLabel = unit === 'mm' ? 'mm' : 'in';
+  const pt = dpi / 72;
+  const titleFont = Math.round(18 * pt);
+  const metaFont = Math.round(10 * pt);
+
+  let y = margin;
+  ctx.fillStyle = '#1a1917';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = `bold ${titleFont}px monospace`;
+  ctx.fillText(`Sheet ${sheetNum} — cut list`, margin, y);
+  y += titleFont * 1.35;
+
+  ctx.font = `${metaFont}px monospace`;
+  ctx.fillStyle = '#444444';
+  ctx.fillText(`${placed.length} parts · sheet ${sw}×${sh} ${unitLabel}`, margin, y);
+  y += metaFont * 1.35;
+  ctx.fillText('Match each # on the layout (page 2) to this table.', margin, y);
+  y += metaFont * 1.35;
+
+  const tableTop = y + metaFont * 0.5;
+  const tableH = pageH - margin - tableTop;
+  const rowCount = Math.max(placed.length + 1, 1);
+  const rowH = Math.min(Math.round(14 * pt * 1.6), tableH / rowCount);
+  const headerFont = Math.max(Math.round(11 * pt), rowH * 0.45);
+  const rowFont = Math.max(Math.round(10 * pt), rowH * 0.42);
+
+  const cols = [
+    { label: '#', w: contentW * 0.1 },
+    { label: 'Name', w: contentW * 0.52 },
+    { label: 'Size', w: contentW * 0.38 },
+  ];
+
+  ctx.fillStyle = '#1a1917';
+  ctx.font = `bold ${headerFont}px monospace`;
+  let colX = margin;
+  for (const col of cols) {
+    ctx.fillText(col.label, colX, tableTop);
+    colX += col.w;
+  }
+
+  ctx.strokeStyle = '#cccccc';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(margin, tableTop + headerFont * 1.15);
+  ctx.lineTo(margin + contentW, tableTop + headerFont * 1.15);
+  ctx.stroke();
+
+  ctx.font = `${rowFont}px monospace`;
+  for (let i = 0; i < placed.length; i++) {
+    const p = placed[i];
+    const ry = tableTop + headerFont * 1.35 + i * rowH;
+    if (ry + rowH > pageH - margin) break;
+    colX = margin;
+    ctx.fillStyle = '#1a1917';
+    ctx.fillText(String(p.partId), colX, ry);
+    colX += cols[0].w;
+    const name = p.name.length > 28 ? p.name.slice(0, 27) + '…' : p.name;
+    ctx.fillText(name, colX, ry);
+    colX += cols[1].w;
+    ctx.fillText(`${p.origW}×${p.origH}`, colX, ry);
+  }
+
+  return canvas;
+}
+
+function createPdfFromCanvases(pages, dpi) {
+  const enc = new TextEncoder();
+  const chunks = [];
+  let length = 0;
+  const offsets = [0];
+  const pageCount = pages.length;
+  const pageObjStart = 3;
+
+  function append(data) {
+    const buf = typeof data === 'string' ? enc.encode(data) : data;
+    chunks.push(buf);
+    length += buf.byteLength;
+  }
+
+  function markObj() {
+    offsets.push(length);
+  }
+
+  append('%PDF-1.4\n');
+
+  markObj();
+  append('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+
+  const pageKids = [];
+  for (let i = 0; i < pageCount; i++) pageKids.push(`${pageObjStart + i * 3} 0 R`);
+  markObj();
+  append(`2 0 obj\n<< /Type /Pages /Kids [${pageKids.join(' ')}] /Count ${pageCount} >>\nendobj\n`);
+
+  for (let i = 0; i < pageCount; i++) {
+    const { canvas, widthPt, heightPt } = pages[i];
+    const imgW = canvas.width;
+    const imgH = canvas.height;
+    const pageWPt = widthPt ?? (imgW * 72) / dpi;
+    const pageHPt = heightPt ?? (imgH * 72) / dpi;
+    const jpegBytes = Uint8Array.from(
+      atob(canvas.toDataURL('image/jpeg', 0.92).split(',')[1]),
+      (c) => c.charCodeAt(0),
+    );
+    const pageNum = pageObjStart + i * 3;
+    const contentNum = pageNum + 1;
+    const imageNum = pageNum + 2;
+    const contentStream = `q\n${pageWPt} 0 0 ${pageHPt} 0 0 cm\n/Im1 Do\nQ`;
+    const box = `[0 0 ${pageWPt} ${pageHPt}]`;
+
+    markObj();
+    append(`${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox ${box} /CropBox ${box} `
+      + `/Contents ${contentNum} 0 R /Resources << /XObject << /Im1 ${imageNum} 0 R >> >> >>\nendobj\n`);
+
+    markObj();
+    append(`${contentNum} 0 obj\n<< /Length ${contentStream.length} >>\nstream\n`
+      + `${contentStream}\nendstream\nendobj\n`);
+
+    markObj();
+    append(`${imageNum} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} `
+      + `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`);
+    append(jpegBytes);
+    append('\nendstream\nendobj\n');
+  }
+
+  const totalObjs = 2 + pageCount * 3;
+  const xrefPos = length;
+  append('xref\n');
+  append(`0 ${totalObjs + 1}\n`);
+  append('0000000000 65535 f \n');
+  for (let i = 1; i <= totalObjs; i++) {
+    append(`${String(offsets[i]).padStart(10, '0')} 00000 n \n`);
+  }
+  append('trailer\n');
+  append(`<< /Size ${totalObjs + 1} /Root 1 0 R >>\n`);
+  append('startxref\n');
+  append(`${xrefPos}\n`);
+  append('%%EOF\n');
+
+  return new Blob(chunks, { type: 'application/pdf' });
+}
+
+function downloadPrintPdf(sw, sh, sheet, kerf, unit, sheetNum) {
+  const letter = letterPagePdfSpec();
+  downloadBlob(
+    `sheet_${sheetNum}_print.pdf`,
+    'application/pdf',
+    createPdfFromCanvases([
+      {
+        canvas: buildCutListPage(sheet, unit, PRINT_DPI, sheetNum, sw, sh),
+        widthPt: letter.widthPt,
+        heightPt: letter.heightPt,
+      },
+      {
+        canvas: buildLayoutPrintPage(sw, sh, sheet, kerf, unit, PRINT_DPI, sheetNum),
+        widthPt: letter.widthPt,
+        heightPt: letter.heightPt,
+      },
+    ], PRINT_DPI),
+  );
+}
+
+function downloadPrintPng(sw, sh, sheet, kerf, unit, sheetNum, previewCanvas) {
+  const a = document.createElement('a');
+  a.download = `sheet_${sheetNum}.png`;
+  a.href = previewCanvas.toDataURL('image/png');
+  a.click();
+}
+
+function fitSheetPreviewSize(containerW, containerH, sw, sh) {
+  let w = containerW;
+  let h = (w * sh) / sw;
+  if (h > containerH) {
+    h = containerH;
+    w = (h * sw) / sh;
+  }
+  return {
+    w: Math.max(1, Math.floor(w)),
+    h: Math.max(1, Math.floor(h)),
+  };
+}
+
+function drawSheetCanvas(ctx, dw, dh, sw, sh, sheet, kerf, unit, colors) {
+  drawSheetLayout(ctx, 0, 0, dw, dh, sw, sh, sheet, kerf, unit, colors, false);
 }
 
 function mountSheetCanvas(wrap, sw, sh, sheet, kerf, unit) {
@@ -1698,22 +2212,36 @@ function runPacking() {
     return;
   }
 
-  /* Expand qty, assign colors by name */
+  /* Expand qty, assign colors + hatch patterns by name */
   const expanded = [];
   let colorIdx = 0;
+  let patIdx = 0;
   const nameColorMap = {};
+  const namePatternMap = {};
   for (const c of cuts) {
-    if (!nameColorMap[c.name])
+    if (!nameColorMap[c.name]) {
       nameColorMap[c.name] = PALETTE[colorIdx++ % PALETTE.length];
-    for (let q = 0; q < c.qty; q++)
-      expanded.push({ w: c.w, h: c.h, name: c.name, color: nameColorMap[c.name] });
+      namePatternMap[c.name] = patIdx++ % HATCH_PATTERNS.length;
+    }
+    for (let q = 0; q < c.qty; q++) {
+      expanded.push({
+        w: c.w,
+        h: c.h,
+        name: c.name,
+        color: nameColorMap[c.name],
+        patternIdx: namePatternMap[c.name],
+      });
+    }
   }
 
   const ordered = orderPartsForCutting(expanded);
   const maxSheets = 50;
   const sheetArea = sw * sh;
   const { sheets, remaining } = packAllSheets(sw, sh, ordered, kerf, allowRot, maxSheets);
-  for (const s of sheets) alignSimilarPiecesSecondPass(s, sw, sh, kerf);
+  for (const s of sheets) {
+    alignSimilarPiecesSecondPass(s, sw, sh, kerf);
+    assignPartIds(s);
+  }
 
   /* ── Stats ── */
   const totalArea = expanded.reduce((s, p) => s + p.w * p.h, 0);
@@ -1774,20 +2302,26 @@ function runPacking() {
         <div class="sheet-title">
           Sheet ${si + 1} — ${sheet.placed.length} parts — ${sheetUtil}% utilization
         </div>
-        <button type="button" class="dl-btn" id="dl-${si}">
-          <i class="ti ti-download" aria-hidden="true"></i> Download PNG
-        </button>
+        <div class="sheet-actions">
+          <button type="button" class="dl-btn primary" id="pdf-${si}">
+            <i class="ti ti-printer" aria-hidden="true"></i> Print PDF
+          </button>
+          <button type="button" class="dl-btn" id="png-${si}">
+            <i class="ti ti-download" aria-hidden="true"></i> Download PNG
+          </button>
+        </div>
       </div>
     `;
 
-    const canvas = mountSheetCanvas(wrap, sw, sh, sheet, kerf, unit);
+    const previewCanvas = mountSheetCanvas(wrap, sw, sh, sheet, kerf, unit);
     resultsEl.appendChild(wrap);
 
-    wrap.querySelector(`#dl-${si}`).onclick = () => {
-      const a = document.createElement('a');
-      a.download = `sheet_${si + 1}.png`;
-      a.href = canvas.toDataURL('image/png');
-      a.click();
+    const sheetNum = si + 1;
+    wrap.querySelector(`#pdf-${si}`).onclick = () => {
+      downloadPrintPdf(sw, sh, sheet, kerf, unit, sheetNum);
+    };
+    wrap.querySelector(`#png-${si}`).onclick = () => {
+      downloadPrintPng(sw, sh, sheet, kerf, unit, sheetNum, previewCanvas);
     };
   });
 }

@@ -33,19 +33,80 @@ jobs:
         run: aws sts get-caller-identity
       - name: deploy
         run: |
-          aws cloudformation deploy \
-            --template-file cloud/certificate.cfn.yaml \
-            --region "$AWS_REGION" \
-            --stack-name opticutter-static-website-certificate \
-            --parameter-overrides \
-              DomainName="$SITE_DOMAIN" \
-              HostedZoneId="$SITE_HOSTED_ZONE_ID"
-
           CERT_ARN=$(aws cloudformation describe-stacks \
             --region "$AWS_REGION" \
             --stack-name opticutter-static-website-certificate \
             --query "Stacks[0].Outputs[?OutputKey=='CertificateArn'].OutputValue | [0]" \
-            --output text)
+            --output text 2>/dev/null || true)
+
+          NEED_CERT_DEPLOY=true
+          if [ -n "$CERT_ARN" ] && [ "$CERT_ARN" != "None" ]; then
+            CURRENT_CERT_DOMAIN=$(aws acm describe-certificate \
+              --region "$AWS_REGION" \
+              --certificate-arn "$CERT_ARN" \
+              --query 'Certificate.DomainName' \
+              --output text)
+            if [ "$CURRENT_CERT_DOMAIN" = "$SITE_DOMAIN" ]; then
+              NEED_CERT_DEPLOY=false
+              echo "Certificate already issued for $SITE_DOMAIN"
+            fi
+          fi
+
+          if [ "$NEED_CERT_DEPLOY" = true ]; then
+            aws cloudformation deploy \
+              --template-file cloud/certificate.cfn.yaml \
+              --region "$AWS_REGION" \
+              --stack-name opticutter-static-website-certificate \
+              --parameter-overrides \
+                DomainName="$SITE_DOMAIN" \
+                HostedZoneId="$SITE_HOSTED_ZONE_ID"
+
+            CERT_ARN=$(aws cloudformation describe-stacks \
+              --region "$AWS_REGION" \
+              --stack-name opticutter-static-website-certificate \
+              --query "Stacks[0].Outputs[?OutputKey=='CertificateArn'].OutputValue | [0]" \
+              --output text)
+          fi
+
+          BUCKET_NAME=$(aws cloudformation describe-stack-resource \
+            --region "$AWS_REGION" \
+            --stack-name opticutter-static-website \
+            --logical-resource-id RootBucket \
+            --query StackResourceDetail.PhysicalResourceId \
+            --output text 2>/dev/null || true)
+
+          if [ -n "$BUCKET_NAME" ] && [ "$BUCKET_NAME" != "None" ]; then
+            BUCKET_DOMAIN=$(aws s3api get-bucket-location --bucket "$BUCKET_NAME" --output text)
+            if [ "$BUCKET_DOMAIN" = "None" ] || [ -z "$BUCKET_DOMAIN" ]; then
+              BUCKET_REGION="us-east-1"
+            else
+              BUCKET_REGION="$BUCKET_DOMAIN"
+            fi
+            ORIGIN_BUCKET_DOMAIN="${BUCKET_NAME}.s3.${BUCKET_REGION}.amazonaws.com"
+
+            aws cloudformation deploy \
+              --template-file cloud/legacy-redirect.cfn.yaml \
+              --region "$AWS_REGION" \
+              --stack-name opticutter-legacy-redirect \
+              --parameter-overrides \
+                LegacyDomainName="$LEGACY_DOMAIN_NAME" \
+                LegacySubDomain="$LEGACY_SUB_DOMAIN" \
+                AltLegacySubDomain="$LEGACY_ALT_SUB_DOMAIN" \
+                SiteDomainName="$SITE_DOMAIN" \
+                HostedZoneId="$LEGACY_HOSTED_ZONE_ID" \
+                OriginBucketDomainName="$ORIGIN_BUCKET_DOMAIN"
+
+            LEGACY_DISTR_ID=$(aws cloudformation describe-stack-resource \
+              --region "$AWS_REGION" \
+              --stack-name opticutter-legacy-redirect \
+              --logical-resource-id CloudFrontDistribution \
+              --query StackResourceDetail.PhysicalResourceId \
+              --output text 2>/dev/null || true)
+
+            if [ -n "$LEGACY_DISTR_ID" ] && [ "$LEGACY_DISTR_ID" != "None" ]; then
+              aws cloudfront wait distribution-deployed --id "$LEGACY_DISTR_ID"
+            fi
+          fi
 
           aws cloudformation deploy \
             --template-file cloud/stack.cfn.yaml \
@@ -56,39 +117,12 @@ jobs:
               CertificateArn="$CERT_ARN" \
               HostedZoneId="$SITE_HOSTED_ZONE_ID"
 
-          BUCKET_NAME=$(aws cloudformation describe-stack-resource \
-            --region "$AWS_REGION" \
-            --stack-name opticutter-static-website \
-            --logical-resource-id RootBucket \
-            --query StackResourceDetail.PhysicalResourceId \
-            --output text)
-
-          BUCKET_DOMAIN=$(aws s3api get-bucket-location --bucket "$BUCKET_NAME" --output text)
-          if [ "$BUCKET_DOMAIN" = "None" ] || [ -z "$BUCKET_DOMAIN" ]; then
-            BUCKET_REGION="us-east-1"
-          else
-            BUCKET_REGION="$BUCKET_DOMAIN"
-          fi
-          ORIGIN_BUCKET_DOMAIN="${BUCKET_NAME}.s3.${BUCKET_REGION}.amazonaws.com"
-
           DISTR_ID=$(aws cloudformation describe-stack-resource \
             --region "$AWS_REGION" \
             --stack-name opticutter-static-website \
             --logical-resource-id CloudFrontDistribution \
             --query StackResourceDetail.PhysicalResourceId \
             --output text)
-
-          aws cloudformation deploy \
-            --template-file cloud/legacy-redirect.cfn.yaml \
-            --region "$AWS_REGION" \
-            --stack-name opticutter-legacy-redirect \
-            --parameter-overrides \
-              LegacyDomainName="$LEGACY_DOMAIN_NAME" \
-              LegacySubDomain="$LEGACY_SUB_DOMAIN" \
-              AltLegacySubDomain="$LEGACY_ALT_SUB_DOMAIN" \
-              SiteDomainName="$SITE_DOMAIN" \
-              HostedZoneId="$LEGACY_HOSTED_ZONE_ID" \
-              OriginBucketDomainName="$ORIGIN_BUCKET_DOMAIN"
 
           aws s3 sync . "s3://$BUCKET_NAME" --exclude ".git*/*" --exclude "cloud/*" --delete
           aws cloudfront create-invalidation \
