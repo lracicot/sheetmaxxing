@@ -3,12 +3,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Parameters:
   DomainName:
     Type: String
-  SubDomain:
-    Type: String
-    Default: opticutter
-  AltSubDomain:
-    Type: String
-    Default: sheetmaxxing
+    Default: sheetmaxxing.com
   HostedZoneId:
     Type: String
 
@@ -16,13 +11,13 @@ Resources:
   Certificate:
     Type: AWS::CertificateManager::Certificate
     Properties:
-      DomainName: !Sub '${SubDomain}.${DomainName}'
+      DomainName: !Ref DomainName
       SubjectAlternativeNames:
-        - !Sub '${AltSubDomain}.${DomainName}'
+        - !Sub 'www.${DomainName}'
       DomainValidationOptions:
-        - DomainName: !Sub '${SubDomain}.${DomainName}'
+        - DomainName: !Ref DomainName
           HostedZoneId: !Ref HostedZoneId
-        - DomainName: !Sub '${AltSubDomain}.${DomainName}'
+        - DomainName: !Sub 'www.${DomainName}'
           HostedZoneId: !Ref HostedZoneId
       ValidationMethod: DNS
 

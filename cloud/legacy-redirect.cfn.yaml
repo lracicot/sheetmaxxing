@@ -1,0 +1,118 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  LegacyDomainName:
+    Type: String
+    Default: louisracicot.com
+  LegacySubDomain:
+    Type: String
+    Default: sheetmaxxing
+  AltLegacySubDomain:
+    Type: String
+    Default: opticutter
+  SiteDomainName:
+    Type: String
+    Default: sheetmaxxing.com
+  HostedZoneId:
+    Type: String
+  OriginBucketDomainName:
+    Type: String
+    Description: Regional domain name of the site S3 bucket (unused origin; redirect runs on viewer-request)
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub '${LegacySubDomain}.${LegacyDomainName}'
+      SubjectAlternativeNames:
+        - !Sub '${AltLegacySubDomain}.${LegacyDomainName}'
+      DomainValidationOptions:
+        - DomainName: !Sub '${LegacySubDomain}.${LegacyDomainName}'
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub '${AltLegacySubDomain}.${LegacyDomainName}'
+          HostedZoneId: !Ref HostedZoneId
+      ValidationMethod: DNS
+
+  RedirectFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${AWS::StackName}-redirect'
+      AutoPublish: true
+      FunctionCode: !Sub |
+        function handler(event) {
+          var request = event.request;
+          var qs = "";
+          if (request.querystring && Object.keys(request.querystring).length > 0) {
+            qs = "?" + Object.keys(request.querystring).map(function(key) {
+              return key + "=" + request.querystring[key].value;
+            }).join("&");
+          }
+          return {
+            statusCode: 301,
+            statusDescription: "Moved Permanently",
+            headers: {
+              location: { value: "https://${SiteDomainName}" + request.uri + qs }
+            }
+          };
+        }
+      FunctionConfig:
+        Comment: Redirect legacy hostnames to the primary site domain
+        Runtime: cloudfront-js-2.0
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+        - !Sub '${LegacySubDomain}.${LegacyDomainName}'
+        - !Sub '${AltLegacySubDomain}.${LegacyDomainName}'
+        DefaultCacheBehavior:
+          AllowedMethods:
+          - GET
+          - HEAD
+          Compress: true
+          DefaultTTL: 86400
+          ForwardedValues:
+            QueryString: true
+          MaxTTL: 31536000
+          TargetOriginId: !Sub 'S3-${AWS::StackName}-origin'
+          ViewerProtocolPolicy: redirect-to-https
+          FunctionAssociations:
+          - EventType: viewer-request
+            FunctionARN: !GetAtt RedirectFunction.FunctionMetadata.FunctionARN
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        Origins:
+        - DomainName: !Ref OriginBucketDomainName
+          Id: !Sub 'S3-${AWS::StackName}-origin'
+          S3OriginConfig: {}
+        PriceClass: PriceClass_All
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: sni-only
+
+  LegacyDNS:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${LegacySubDomain}.${LegacyDomainName}'
+      Type: A
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+
+  AltLegacyDNS:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${AltLegacySubDomain}.${LegacyDomainName}'
+      Type: A
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+
+Outputs:
+  DistributionId:
+    Value: !Ref CloudFrontDistribution

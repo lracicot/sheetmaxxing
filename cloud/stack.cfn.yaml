@@ -2,12 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Parameters:
   DomainName:
     Type: String
-  SubDomain:
-    Type: String
-    Default: opticutter
-  AltSubDomain:
-    Type: String
-    Default: sheetmaxxing
+    Default: sheetmaxxing.com
   CertificateArn:
     Type: String
   HostedZoneId:
@@ -44,8 +39,8 @@ Resources:
     Properties:
       DistributionConfig:
         Aliases:
-        - !Sub '${SubDomain}.${DomainName}'
-        - !Sub '${AltSubDomain}.${DomainName}'
+        - !Ref DomainName
+        - !Sub 'www.${DomainName}'
         DefaultCacheBehavior:
           Compress: true
           DefaultTTL: 86400
@@ -89,23 +84,23 @@ Resources:
         OriginAccessControlOriginType: s3
         SigningBehavior: always
         SigningProtocol: sigv4
-        Description: !Sub 'OAC for ${SubDomain}.${DomainName}'
+        Description: !Sub 'OAC for ${DomainName}'
 
-  DNS:
+  ApexDNS:
     Type: AWS::Route53::RecordSet
     Properties:
       HostedZoneId: !Ref HostedZoneId
-      Name: !Sub '${SubDomain}.${DomainName}'
+      Name: !Ref DomainName
       Type: A
       AliasTarget:
         HostedZoneId: Z2FDTNDATAQYW2
         DNSName: !GetAtt CloudFrontDistribution.DomainName
 
-  AltDNS:
+  WwwDNS:
     Type: AWS::Route53::RecordSet
     Properties:
       HostedZoneId: !Ref HostedZoneId
-      Name: !Sub '${AltSubDomain}.${DomainName}'
+      Name: !Sub 'www.${DomainName}'
       Type: A
       AliasTarget:
         HostedZoneId: Z2FDTNDATAQYW2
@@ -120,4 +115,4 @@ Outputs:
   DistributionId:
     Value: !Ref CloudFrontDistribution
   SiteURL:
-    Value: !Sub 'https://${SubDomain}.${DomainName}'
+    Value: !Sub 'https://${DomainName}'

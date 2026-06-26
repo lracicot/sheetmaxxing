@@ -1,4 +1,4 @@
-# Opticutter
+# Sheetmaxxing
 
 Sheet cut optimizer (static site).
 
@@ -6,7 +6,15 @@ Sheet cut optimizer (static site).
 
 ## Hosting
 
-**URL:** https://sheetmaxxing.louisracicot.com
+**URL:** https://sheetmaxxing.com
+
+`sheetmaxxing.louisracicot.com` and `opticutter.louisracicot.com` redirect to the primary domain.
+
+### Domain setup
+
+1. Register `sheetmaxxing.com` and create a Route53 hosted zone for it.
+2. Point the domain's nameservers at the hosted zone.
+3. Set the `SITE_HOSTED_ZONE_ID` GitHub variable to that zone's ID.
 
 ## Deploy
 
@@ -19,10 +27,12 @@ git push origin main
 | Name | Type | Value |
 |------|------|--------|
 | `AWS_DEPLOY_ROLE_ARN` | secret | IAM role ARN for OIDC deploy (from stack output below) |
-| `HOSTED_ZONE_ID` | variable | Route53 hosted zone ID for `louisracicot.com` |
+| `SITE_HOSTED_ZONE_ID` | variable | Route53 hosted zone ID for `sheetmaxxing.com` |
+| `HOSTED_ZONE_ID` | variable | Route53 hosted zone ID for `louisracicot.com` (legacy redirects) |
 
 ```bash
 gh secret set AWS_DEPLOY_ROLE_ARN --repo lracicot/sheetmaxxing
+gh variable set SITE_HOSTED_ZONE_ID --repo lracicot/sheetmaxxing
 gh variable set HOSTED_ZONE_ID --repo lracicot/sheetmaxxing
 ```
 
