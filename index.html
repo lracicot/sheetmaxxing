@@ -1715,15 +1715,15 @@ function labelFontPx(pw, ph, labelMode) {
   const maxDim = Math.max(pw, ph);
 
   if (labelMode === 'number-rotated') {
-    return clamp(Math.min(maxDim * 0.13, minDim * 0.72), 10, 17);
+    return Math.max(8, Math.min(maxDim * 0.15, minDim * 0.72));
   }
   if (labelMode === 'number') {
-    return clamp(minDim * 0.55, 9, 15);
+    return Math.max(8, minDim * 0.55);
   }
   if (labelMode === 'name') {
-    return clamp(Math.min(minDim * 0.28, ph * 0.26), 9, 14);
+    return Math.max(8, Math.min(minDim * 0.32, ph * 0.3));
   }
-  return clamp(Math.min(minDim * 0.24, ph * 0.24, pw * 0.09), 9, 14);
+  return Math.max(8, Math.min(minDim * 0.28, ph * 0.28, pw * 0.14));
 }
 
 function drawSingleLabel(ctx, text, x, y, fontPx) {
@@ -1823,7 +1823,7 @@ function drawPartLabel(ctx, p, x, y, pw, ph, pxPerUnit, unit, labelMode, print) 
   }
 
   const primary = labelFontPx(pw, ph, labelMode);
-  const secondary = Math.max(9, primary * 0.82);
+  const secondary = Math.max(8, primary * 0.82);
   const cx = x + pw / 2;
   const cy = y + ph / 2;
   const dim = `${p.origW}×${p.origH}`;
@@ -2138,10 +2138,19 @@ function downloadPrintPdf(sw, sh, sheet, kerf, unit, sheetNum) {
   );
 }
 
-function downloadPrintPng(sw, sh, sheet, kerf, unit, sheetNum, previewCanvas) {
+function downloadPrintPng(sw, sh, sheet, kerf, unit, sheetNum) {
+  const TARGET_W = 2400;
+  const scale = TARGET_W / sw;
+  const canvasW = TARGET_W;
+  const canvasH = Math.round(sh * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasW;
+  canvas.height = canvasH;
+  const ctx = canvas.getContext('2d');
+  drawSheetLayout(ctx, 0, 0, canvasW, canvasH, sw, sh, sheet, kerf, unit, getSheetDrawColors(), false);
   const a = document.createElement('a');
   a.download = `sheet_${sheetNum}.png`;
-  a.href = previewCanvas.toDataURL('image/png');
+  a.href = canvas.toDataURL('image/png');
   a.click();
 }
 
@@ -2321,7 +2330,7 @@ function runPacking() {
       downloadPrintPdf(sw, sh, sheet, kerf, unit, sheetNum);
     };
     wrap.querySelector(`#png-${si}`).onclick = () => {
-      downloadPrintPng(sw, sh, sheet, kerf, unit, sheetNum, previewCanvas);
+      downloadPrintPng(sw, sh, sheet, kerf, unit, sheetNum);
     };
   });
 }
